@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Laboratorio de limaduras de hierro</title>
+<style>
+:root{color-scheme:light;--ink:#20242b;--muted:#68717d;--line:#d9dde3;--accent:#315fbd}
+*{box-sizing:border-box}
+body{margin:0;padding:22px;background:#eef1f5;color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+main{max-width:1050px;margin:auto;background:white;border:1px solid var(--line);border-radius:18px;padding:22px;box-shadow:0 8px 28px #18243a12}
+h1{font-size:clamp(22px,4vw,32px);margin:0 0 5px}
+.sub{color:var(--muted);margin:0 0 18px}
+.status{display:inline-block;background:#eceff3;border-radius:30px;padding:7px 12px;font-size:12px;font-weight:750;letter-spacing:.04em}
+.stage{margin-top:12px;border:1px solid #c9c4b6;border-radius:13px;overflow:hidden;background:#f5f3eb}
+canvas{display:block;width:100%;height:auto;touch-action:pan-y}
+.controls{display:flex;flex-wrap:wrap;gap:9px;margin:14px 0}
+button{border:1px solid #cbd1da;background:#fff;color:#20242b;border-radius:10px;padding:11px 15px;min-height:44px;font-weight:700;font-size:14px;cursor:pointer}
+button:hover{background:#f1f4f8}
+button.primary{background:var(--accent);color:white;border-color:var(--accent)}
+button.primary:hover{background:#254d9d}
+button:focus-visible,input:focus-visible{outline:3px solid #8fb3ff;outline-offset:2px}
+.panel{border:1px solid var(--line);border-radius:13px;padding:15px;margin-top:12px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.control label{font-size:14px;font-weight:700;display:flex;justify-content:space-between;gap:8px;margin-bottom:8px}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.check{display:flex;align-items:center;gap:9px;font-size:14px}
+.check input{width:18px;height:18px;accent-color:var(--accent)}
+.legend{display:flex;flex-wrap:wrap;gap:16px;color:var(--muted);font-size:13px;margin:14px 0 5px}
+.note{color:var(--muted);font-size:14px;line-height:1.5;margin:12px 0 0}
+@media(max-width:680px){body{padding:10px}main{padding:14px}.panel{grid-template-columns:1fr;gap:12px}}
+</style>
+</head>
+<body>
+<main>
+  <h1>Laboratorio interactivo: limaduras de hierro</h1>
+  <p class="sub">Observa cómo las limaduras se orientan y se acumulan alrededor de los polos de un imán de barra.</p>
+  <span id="status" class="status" aria-live="polite">● LIMADURAS DISPERSAS</span>
+  <div class="stage"><canvas id="scene" width="1000" height="760" aria-label="Simulación de limaduras de hierro alrededor de un imán con polos norte y sur"></canvas></div>
+  <div class="controls">
+    <button id="attract" class="primary">⚡ Activar atracción</button>
+    <button id="scatter">↗ Dispersar limaduras</button>
+    <button id="reset">↺ Reiniciar</button>
+  </div>
+  <section class="panel" aria-label="Controles del experimento">
+    <div class="control">
+      <label for="amount"><span>Cantidad de limaduras</span><output id="amountOut">12 000</output></label>
+      <input id="amount" type="range" min="2000" max="20000" step="1000" value="12000">
+    </div>
+    <div class="control">
+      <label for="strength"><span>Fuerza de atracción</span><output id="strengthOut">85%</output></label>
+      <input id="strength" type="range" min="10" max="100" value="85">
+    </div>
+    <div class="control">
+      <label for="speed"><span>Velocidad</span><output id="speedOut">Normal</output></label>
+      <input id="speed" type="range" min="1" max="10" value="5">
+      <label class="check" style="margin-top:12px"><input id="motion" type="checkbox" checked> Animar el movimiento</label>
+    </div>
+  </section>
+  <div class="legend"><span>🔴 Polo norte (N)</span><span>🔵 Polo sur (S)</span><span>⚫ Limaduras de hierro</span></div>
+  <p id="hint" class="note">Las limaduras están esparcidas por el papel. Pulsa «Activar atracción» para observar cómo se desplazan y forman arcos curvos entre los dos polos, con mayor concentración cerca de sus extremos.</p>
+  <p class="note"><strong>Nota:</strong> Es una simulación visual didáctica. Las limaduras reales se magnetizan y se alinean con el campo; aquí se representa ese comportamiento mediante partículas animadas.</p>
+</main>
+<script>
+(() => {
+ const canvas=document.getElementById('scene'),ctx=canvas.getContext('2d');
+ const $=id=>document.getElementById(id);
+ const W=canvas.width,H=canvas.height,cx=500,cy=380,pole=160,barH=74,L=cx-pole,R=cx+pole;
+ let seed=84371,particles=[],fieldLines=[],active=false,motion=true,last=0,raf=0;
+ const rand=()=>{seed=(seed*1664525+1013904223)>>>0;return seed/4294967296;};
+ const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+ // Campo dipolar aproximado: norte à gauche, sud à droite.
+ function field(x,y){
+   const dxN=x-L,dxS=x-R,dy=y-cy;
+   const rn=Math.max(90,dxN*dxN+dy*dy),rs=Math.max(90,dxS*dxS+dy*dy);
+   return {x:dxN/Math.pow(rn,1.5)-dxS/Math.pow(rs,1.5),
+           y:dy/Math.pow(rn,1.5)-dy/Math.pow(rs,1.5)};
+ }
+ function trace(angle){
+   let x=L+13*Math.cos(angle),y=cy+13*Math.sin(angle),pts=[];
+   for(let i=0;i<1500;i++){
+     pts.push({x,y});
+     const b=field(x,y),d=Math.hypot(b.x,b.y)||1;
+     x+=b.x/d*2.15;y+=b.y/d*2.15;
+     if(Math.hypot(x-R,y-cy)<15||x<5||x>W-5||y<5||y>H-5)break;
+   }
+   return pts;
+ }
+ function buildField(){
+   fieldLines=[];
+   // Semicircunferencias de líneas que salen del norte y entran al sur.
+   for(let i=0;i<121;i++){
+     const angle=-Math.PI/2+Math.PI*i/120,line=trace(angle);
+     if(line.length>25)fieldLines.push(line);
+   }
+ }
+ function makeTargets(){
+   const n=Number($('amount').value),list=[];
+   // Distribución de partículas a lo largo de las líneas del campo.
+   const valid=fieldLines.filter(p=>p.length>25);
+   const totalLen=valid.reduce((s,p)=>s+p.length,0);
+   for(const line of valid){
+     const count=Math.max(1,Math.round(n*.82*line.length/totalLen));
+     for(let j=0;j<count;j++){
+       const k=Math.floor(rand()*(line.length-1)),q=line[k];
+       const p0=line[Math.max(0,k-2)],p1=line[Math.min(line.length-1,k+2)];
+       const dx=p1.x-p0.x,dy=p1.y-p0.y,d=Math.hypot(dx,dy)||1;
+       const off=(rand()-.5)*(4+rand()*13);
+       list.push({x:q.x-dy/d*off,y:q.y+dx/d*off});
+     }
+   }
+   // Más limaduras alrededor de los dos polos, como en el experimento real.
+   for(let i=0;i<n*.18;i++){
+     const side=i%2===0?-1:1,theta=rand()*Math.PI*2;
+     const radius=4+Math.pow(rand(),1.8)*82;
+     list.push({x:(side<0?L:R)+Math.cos(theta)*radius*.8,
+                y:cy+Math.sin(theta)*radius});
+   }
+   return list;
+ }
+ let targets=[];
+ function createParticles(n){
+   particles=[];
+   for(let i=0;i<n;i++){
+     let x=15+rand()*(W-30),y=15+rand()*(H-30);
+     // Evita colocar limaduras dentro del imán.
+     if(x>L-8&&x<R+8&&Math.abs(y-cy)<barH/2+8){x=rand()<.5?22:W-22;y=25+rand()*(H-50);}
+     particles.push({x,y,vx:0,vy:0,size:.65+rand()*1.15,goal:targets[i%targets.length]});
+   }
+ }
+ function paper(){
+   ctx.fillStyle='#f5f3eb';ctx.fillRect(0,0,W,H);
+   for(let i=0;i<2600;i++){
+     ctx.fillStyle=rand()>.5?'rgba(93,84,68,.035)':'rgba(255,255,255,.19)';
+     ctx.fillRect(rand()*W,rand()*H,1.1,1.1);
+   }
+ }
+ function drawField(){
+   ctx.save();ctx.strokeStyle='rgba(49,48,43,.13)';ctx.lineWidth=1.25;
+   for(const line of fieldLines){
+     ctx.beginPath();line.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke();
+   }
+   ctx.restore();
+ }
+ function drawParticles(){
+   ctx.save();
+   for(const p of particles){
+     const b=field(p.x,p.y),angle=Math.atan2(b.y,b.x);
+     const len=p.size*(1.45+Math.min(1.8,Math.hypot(p.vx,p.vy)*.12));
+     ctx.beginPath();
+     ctx.moveTo(p.x-Math.cos(angle)*len,p.y-Math.sin(angle)*len);
+     ctx.lineTo(p.x+Math.cos(angle)*len,p.y+Math.sin(angle)*len);
+     ctx.strokeStyle='rgba(30,30,28,.78)';ctx.lineWidth=Math.max(.65,p.size*.8);ctx.stroke();
+   }
+   ctx.restore();
+ }
+ function drawMagnet(){
+   ctx.save();ctx.shadowColor='rgba(0,0,0,.24)';ctx.shadowBlur=13;ctx.shadowOffsetY=6;
+   ctx.beginPath();ctx.roundRect(L,cy-barH/2,pole*2,barH,8);ctx.fillStyle='#34383e';ctx.fill();
+   ctx.shadowColor='transparent';
+   ctx.fillStyle='#b33b33';ctx.beginPath();ctx.roundRect(L,cy-barH/2,pole,barH,[8,0,0,8]);ctx.fill();
+   ctx.fillStyle='#354a80';ctx.beginPath();ctx.roundRect(cx,cy-barH/2,pole,barH,[0,8,8,0]);ctx.fill();
+   ctx.fillStyle='white';ctx.font='bold 38px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';
+   ctx.fillText('N',L+pole/2,cy);ctx.fillText('S',R-pole/2,cy);ctx.restore();
+ }
+ function update(dt){
+   const power=Number($('strength').value)/100,speed=Number($('speed').value)/5;
+   for(const p of particles){
+     if(active){
+       const dx=p.goal.x-p.x,dy=p.goal.y-p.y,d=Math.hypot(dx,dy)||1;
+       const force=(.016+power*.105)*speed*Math.min(1,d/24);
+       p.vx+=dx/d*force;p.vy+=dy/d*force;
+     }
+     p.vx*=.91;p.vy*=.91;
+     if(motion){p.x+=p.vx*dt;p.y+=p.vy*dt;}
+   }
+ }
+ function render(t){
+   const dt=Math.min(2,(t-last)/16.67||1);last=t;
+   if(motion)update(dt);
+   paper();if(active)drawField();drawParticles();drawMagnet();
+   raf=requestAnimationFrame(render);
+ }
+ function setActive(value){
+   active=value;
+   $('attract').textContent=value?'Ⅱ Detener atracción':'⚡ Activar atracción';
+   $('status').textContent=value?'● ATRACCIÓN ACTIVA':'● LIMADURAS DISPERSAS';
+   $('status').style.background=value?'#dcebdd':'#eceff3';
+   $('hint').textContent=value
+    ?'Observa cómo las partículas se desplazan hacia la configuración del campo: se forman arcos alargados entre los polos y una acumulación más densa en ambos extremos.'
+    :'Las limaduras están esparcidas por el papel. Activa la atracción para formar el patrón magnético.';
+ }
+ function rebuild(){buildField();targets=makeTargets();createParticles(Number($('amount').value));}
+ $('attract').addEventListener('click',()=>setActive(!active));
+ $('scatter').addEventListener('click',()=>{setActive(false);createParticles(particles.length);});
+ $('reset').addEventListener('click',()=>{
+   setActive(false);$('amount').value=12000;$('amountOut').textContent='12 000';
+   $('strength').value=85;$('strengthOut').textContent='85%';
+   $('speed').value=5;$('speedOut').textContent='Normal';rebuild();
+ });
+ $('amount').addEventListener('input',e=>{$('amountOut').textContent=Number(e.target.value).toLocaleString('es-MX');rebuild();});
+ $('strength').addEventListener('input',e=>$('strengthOut').textContent=e.target.value+'%');
+ $('speed').addEventListener('input',e=>{
+   const names=['','Muy lenta','Lenta','Suave','Media','Normal','Rápida','Muy rápida','Muy rápida','Máxima','Máxima'];
+   $('speedOut').textContent=names[Number(e.target.value)];
+ });
+ $('motion').addEventListener('change',e=>motion=e.target.checked);
+ rebuild();render(0);
+})();
+</script>
+</body>
+</html>
